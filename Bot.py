@@ -5,6 +5,11 @@ import json
 import base64
 import urllib.request
 import urllib.error
+import random
+import datetime
+import discord
+from discord.ext import commands
+import matplotlib.pyplot as plt
 
 app = Flask('')
 
@@ -22,23 +27,20 @@ def keep_alive():
 
 keep_alive()
 
-import discord
-from discord.ext import commands
-import matplotlib.pyplot as plt
-import datetime
-
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- GITHUB KALIICI VERİTABANI SİSTEMİ ---
+# --- GITHUB KALICI VERİTABANI SİSTEMİ ---
 DB_FILE = "veritabani.json"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")  # Örn: "kullaniciadi/reponame"
 
 def github_veri_cek():
+    # ÇÖKME HATASI BURADA DÜZELTİLDİ: Artık (None, None) dönüyor.
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        return None
+        return None, None
+        
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {GITHUB_TOKEN}",
@@ -50,7 +52,7 @@ def github_veri_cek():
             file_content = base64.b64decode(res_data["content"]).decode("utf-8")
             return json.loads(file_content), res_data["sha"]
     except Exception as e:
-        print(f"GitHub'dan veri çekilemedi (İlk çalışmada normal olabilir): {e}")
+        print(f"GitHub'dan veri çekilemedi: {e}")
         return None, None
 
 def github_veri_kaydet(json_string):
@@ -58,7 +60,6 @@ def github_veri_kaydet(json_string):
         return
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
     
-    # Mevcut dosyanın SHA değerini almalıyız
     _, sha = github_veri_cek()
     
     encoded_content = base64.b64encode(json_string.encode("utf-8")).decode("utf-8")
@@ -83,8 +84,8 @@ def github_veri_kaydet(json_string):
         print(f"GitHub'a veri kaydedilirken hata oluştu: {e}")
 
 def verileri_yukle():
-    # Önce GitHub'dan çekmeyi dene
     gh_data, _ = github_veri_cek()
+    data = {}
     if gh_data:
         data = gh_data
     elif os.path.exists(DB_FILE):
@@ -93,8 +94,6 @@ def verileri_yukle():
                 data = json.load(f)
         except Exception:
             data = {}
-    else:
-        data = {}
 
     try:
         loaded_users = {}
@@ -122,6 +121,9 @@ def verileri_yukle():
     }
     return default_users, default_coins, {}, 1
 
+# Verileri başlat
+users, coins, pending_requests, request_counter = verileri_yukle()
+
 def verileri_kaydet():
     users_serializable = {}
     for uid, udata in users.items():
@@ -139,18 +141,13 @@ def verileri_kaydet():
     
     json_str = json.dumps(data, ensure_ascii=False, indent=4)
     
-    # Yerel diske yaz
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
             f.write(json_str)
     except Exception as e:
         print(f"Yerel kayıt hatası: {e}")
         
-    # GitHub'a otomatik commit at
     github_veri_kaydet(json_str)
-
-# Verileri yükle
-users, coins, pending_requests, request_counter = verileri_yukle()
 
 def current_price(symbol):
     c = coins[symbol]
@@ -165,7 +162,6 @@ async def on_ready():
 
 @bot.command(aliases=['bal'])
 async def balance(ctx):
-    """Shows full balance and portfolio."""
     uid = ctx.author.id
     if uid not in users:
         users[uid] = {"cash": 0, "coins": {}, "last_sell": None}
@@ -188,7 +184,6 @@ async def balance(ctx):
 
 @bot.command()
 async def market(ctx):
-    """Lists all coins and their current prices."""
     if not coins:
         await ctx.send("❌ The market is currently empty.")
         return
@@ -202,7 +197,6 @@ async def market(ctx):
 
 @bot.command()
 async def deposit(ctx, amount: int):
-    """Opens a cash deposit request (Requires admin approval)."""
     global request_counter
     if amount <= 0:
         await ctx.send("❌ Invalid amount!")
@@ -220,7 +214,6 @@ async def deposit(ctx, amount: int):
 
 @bot.command()
 async def withdraw(ctx, amount: int):
-    """Opens a cash withdrawal request (Requires admin approval)."""
     global request_counter
     uid = ctx.author.id
     if uid not in users or users[uid]["cash"] < amount:
@@ -239,7 +232,6 @@ async def withdraw(ctx, amount: int):
 
 @bot.command()
 async def buy(ctx, symbol: str, amount: int):
-    """Buys specified amount of coins."""
     symbol = symbol.upper()
     if symbol not in coins:
         await ctx.send("❌ Coin not found!")
@@ -259,22 +251,23 @@ async def buy(ctx, symbol: str, amount: int):
         await ctx.send(f"❌ Insufficient balance! Needed: `${cost}`, You have: `${users[uid]['cash']}`")
         return
         
-    # Transaction
     users[uid]["cash"] -= cost
     users[uid]["coins"][symbol] = users[uid]["coins"].get(symbol, 0) + amount
     
-    # Market update
-    coins[symbol]["vault_cash"] += cost
+    # MATEMATİK YÖNETİCİSİ: ALIŞ ETKİSİ VE RASTGELELİK (HYPE)
+    # Alım yapıldığında havuza giren paraya %0 ile %10 arası ekstra hayali değer eklenir, fiyat rastgele sıçrar.
+    hype_multiplier = random.uniform(1.0, 1.10)
+    coins[symbol]["vault_cash"] += int(cost * hype_multiplier)
     coins[symbol]["total_coin"] += amount
+    
     new_price = current_price(symbol)
     coins[symbol]["history"].append(new_price)
     
     verileri_kaydet()
-    await ctx.send(f"✅ Bought `{amount}` **{symbol}**! Spent: `${cost}`. New Price: `${new_price}`")
+    await ctx.send(f"✅ Bought `{amount}` **{symbol}**! Spent: `${cost}`. New Price: `${new_price}` (Hype Factor applied!)")
 
 @bot.command()
 async def sell(ctx, symbol: str, amount: int):
-    """Sells coins (80% limit and 24h cooldown included)."""
     symbol = symbol.upper()
     if symbol not in coins:
         await ctx.send("❌ Coin not found!")
@@ -284,51 +277,45 @@ async def sell(ctx, symbol: str, amount: int):
     if uid not in users or users[uid]["coins"].get(symbol, 0) < amount:
         await ctx.send("❌ Not enough coins!")
         return
-        
-    current_coins = users[uid]["coins"][symbol]
-    max_sellable = int(current_coins * 0.8)
-    
-    if amount > max_sellable and current_coins > 1:
-        await ctx.send(f"⚠️ **80% Sell Limit!** You can sell a maximum of `{max_sellable}` units at once.")
-        return
-        
-    # 24 Hour Cooldown
-    now = datetime.datetime.now()
-    last = users[uid].get("last_sell")
-    if last and (now - last).total_seconds() < 86400:
-        rem_sec = 86400 - (now - last).total_seconds()
-        hours = int(rem_sec // 3600)
-        await ctx.send(f"⏳ You have already sold today! You must wait `{hours}` hours to sell again.")
-        return
 
     price = current_price(symbol)
-    profit = int(price * amount * 0.95) # 5% market fee
+    
+    # MATEMATİK YÖNETİCİSİ: SATIŞ ETKİSİ VE ASİMETRİK KAYMA (SLIPPAGE)
+    # Kullanıcının sattığı miktar toplam arzın yüzde kaçı?
+    supply_ratio = amount / max(coins[symbol]["total_coin"], 1)
+    
+    # Satış ne kadar büyükse, fiyatı o kadar çok ezen bir ceza katsayısı (Slippage)
+    # Örn: Toplam arzın %10'unu satarsa havuzdan %25 daha fazla para silinir, fiyat dibe çakılır.
+    penalty = 1.0 + (supply_ratio * 2.5) 
+    
+    profit = int(price * amount * 0.95) # %5 standart vergi kesintisi
     
     users[uid]["coins"][symbol] -= amount
     users[uid]["cash"] += profit
-    users[uid]["last_sell"] = now
+    users[uid]["last_sell"] = datetime.datetime.now()
     
-    # Market update
-    coins[symbol]["vault_cash"] = max(1000, coins[symbol]["vault_cash"] - profit)
+    # Fiyatı Asimetrik Olarak Düşür:
+    vault_reduction = int(profit * penalty)
+    coins[symbol]["vault_cash"] = max(1000, coins[symbol]["vault_cash"] - vault_reduction)
     coins[symbol]["total_coin"] = max(10, coins[symbol]["total_coin"] - amount)
+    
     new_price = current_price(symbol)
     coins[symbol]["history"].append(new_price)
     
     verileri_kaydet()
-    await ctx.send(f"📉 Sold `{amount}` **{symbol}** (5% fee deducted). Earned: `${profit}`. New Price: `${new_price}`")
+    await ctx.send(f"📉 Sold `{amount}` **{symbol}**. Earned: `${profit}`. ⚠️ Market Impact: {supply_ratio*100:.1f}%\nNew Price: `${new_price}` (Price tanked due to liquidity loss!)")
 
 @bot.command()
 async def chart(ctx, symbol: str = "ANC"):
-    """Generates a chart image for the selected coin."""
     symbol = symbol.upper()
     if symbol not in coins:
         await ctx.send("❌ Coin not found!")
         return
         
     plt.figure(figsize=(8, 4))
-    plt.plot(coins[symbol]["history"], marker='o', color='gold', linewidth=2)
+    plt.plot(coins[symbol]["history"][-50:], marker='o', color='gold', linewidth=2) # Son 50 işlemi gösterir
     plt.title(f'{coins[symbol]["name"]} ({symbol}) Live Chart')
-    plt.xlabel('Transactions')
+    plt.xlabel('Recent Transactions')
     plt.ylabel('Price ($)')
     plt.grid(True)
     
@@ -339,11 +326,9 @@ async def chart(ctx, symbol: str = "ANC"):
     await ctx.send(file=discord.File(file_name))
 
 # --- ADMIN COMMANDS ---
-
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def requests(ctx):
-    """Lists pending deposit and withdrawal requests."""
     if not pending_requests:
         await ctx.send("👌 No pending requests.")
         return
@@ -357,7 +342,6 @@ async def requests(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def approve(ctx, req_id: int):
-    """Approves a money request."""
     if req_id not in pending_requests:
         await ctx.send("❌ Invalid Request ID!")
         return
@@ -379,7 +363,6 @@ async def approve(ctx, req_id: int):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def deny(ctx, req_id: int):
-    """Denies a money request."""
     if req_id not in pending_requests:
         await ctx.send("❌ Invalid Request ID!")
         return
@@ -390,7 +373,6 @@ async def deny(ctx, req_id: int):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def createcoin(ctx, symbol: str, name: str, init_vault: int, init_coin: int):
-    """Creates a new coin type."""
     symbol = symbol.upper()
     if symbol in coins:
         await ctx.send("❌ A coin with this symbol already exists!")
@@ -404,33 +386,5 @@ async def createcoin(ctx, symbol: str, name: str, init_vault: int, init_coin: in
     }
     verileri_kaydet()
     await ctx.send(f"🎉 **New Coin Created:** {name} ({symbol}) - Starting Price: `${current_price(symbol)}`")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def deletecoin(ctx, symbol: str):
-    """Completely removes a coin type from the market."""
-    symbol = symbol.upper()
-    if symbol not in coins:
-        await ctx.send("❌ Coin not found!")
-        return
-        
-    del coins[symbol]
-    verileri_kaydet()
-    await ctx.send(f"🗑️ **{symbol}** has been completely removed from the market.")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def manipulate(ctx, symbol: str, multiplier: float):
-    """Manipulates price by changing the vault cash with a multiplier."""
-    symbol = symbol.upper()
-    if symbol not in coins:
-        await ctx.send("❌ Coin not found!")
-        return
-        
-    coins[symbol]["vault_cash"] = int(coins[symbol]["vault_cash"] * multiplier)
-    new_price = current_price(symbol)
-    coins[symbol]["history"].append(new_price)
-    verileri_kaydet()
-    await ctx.send(f"⚡ **Market Manipulation!** {symbol} vault updated. New Price: `${new_price}`")
 
 bot.run(os.getenv("TOKEN"))
