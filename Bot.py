@@ -1,6 +1,7 @@
 from flask import Flask
 from threading import Thread
 import os
+import json
 
 app = Flask('')
 
@@ -27,18 +28,65 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- DATA STRUCTURE ---
-users = {}
-coins = {
-    "ANC": {
-        "name": "Anomic Coin",
-        "vault_cash": 100000,
-        "total_coin": 1000,
-        "history": [100.0]
+# --- KALICI VERİTABANI SİSTEMİ (JSON) ---
+DB_FILE = "veritabani.json"
+
+def verileri_yukle():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # JSON anahtarları int (kullanıcı ID'leri) string geleceği için düzeltiyoruz
+                loaded_users = {}
+                for k, v in data.get("users", {}).items():
+                    loaded_users[int(k)] = v
+                    # last_sell tarih alanını datetime objesine çevir
+                    if loaded_users[int(k)].get("last_sell"):
+                        loaded_users[int(k)]["last_sell"] = datetime.datetime.fromisoformat(loaded_users[int(k)]["last_sell"])
+                
+                loaded_requests = {}
+                for k, v in data.get("pending_requests", {}).items():
+                    loaded_requests[int(k)] = v
+
+                return loaded_users, data.get("coins", {}), loaded_requests, data.get("request_counter", 1)
+        except Exception as e:
+            print(f"Veri yüklenirken hata oluştu: {e}")
+    
+    # Varsayılan başlangıç verileri
+    default_users = {}
+    default_coins = {
+        "ANC": {
+            "name": "Anomic Coin",
+            "vault_cash": 100000,
+            "total_coin": 1000,
+            "history": [100.0]
+        }
     }
-}
-pending_requests = {}
-request_counter = 1
+    return default_users, default_coins, {}, 1
+
+def verileri_kaydet():
+    # datetime objelerini stringe çevirerek JSON'a kaydedilebilir hale getiriyoruz
+    users_serializable = {}
+    for uid, udata in users.items():
+        u_copy = udata.copy()
+        if u_copy.get("last_sell"):
+            u_copy["last_sell"] = u_copy["last_sell"].isoformat()
+        users_serializable[str(uid)] = u_copy
+
+    data = {
+        "users": users_serializable,
+        "coins": coins,
+        "pending_requests": {str(k): v for k, v in pending_requests.items()},
+        "request_counter": request_counter
+    }
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"Veri kaydedilirken hata oluştu: {e}")
+
+# Verileri yükle
+users, coins, pending_requests, request_counter = verileri_yukle()
 
 def current_price(symbol):
     c = coins[symbol]
@@ -102,8 +150,9 @@ async def deposit(ctx, amount: int):
         "type": "deposit",
         "amount": amount
     }
-    await ctx.send(f"📥 **Request #{request_counter} Created:** `${amount}` Anomic Cash deposit request sent to admins.")
     request_counter += 1
+    verileri_kaydet()
+    await ctx.send(f"📥 **Request #{request_counter - 1} Created:** `${amount}` Anomic Cash deposit request sent to admins.")
 
 @bot.command()
 async def withdraw(ctx, amount: int):
@@ -120,8 +169,9 @@ async def withdraw(ctx, amount: int):
         "type": "withdraw",
         "amount": amount
     }
-    await ctx.send(f"📤 **Request #{request_counter} Created:** `${amount}` Anomic Cash withdrawal request sent to admins.")
     request_counter += 1
+    verileri_kaydet()
+    await ctx.send(f"📤 **Request #{request_counter - 1} Created:** `${amount}` Anomic Cash withdrawal request sent to admins.")
 
 @bot.command()
 async def buy(ctx, symbol: str, amount: int):
@@ -155,6 +205,7 @@ async def buy(ctx, symbol: str, amount: int):
     new_price = current_price(symbol)
     coins[symbol]["history"].append(new_price)
     
+    verileri_kaydet()
     await ctx.send(f"✅ Bought `{amount}` **{symbol}**! Spent: `${cost}`. New Price: `${new_price}`")
 
 @bot.command()
@@ -199,6 +250,7 @@ async def sell(ctx, symbol: str, amount: int):
     new_price = current_price(symbol)
     coins[symbol]["history"].append(new_price)
     
+    verileri_kaydet()
     await ctx.send(f"📉 Sold `{amount}` **{symbol}** (5% fee deducted). Earned: `${profit}`. New Price: `${new_price}`")
 
 @bot.command()
@@ -257,6 +309,8 @@ async def approve(ctx, req_id: int):
     elif t["type"] == "withdraw":
         users[uid]["cash"] -= t["amount"]
         await ctx.send(f"✅ Withdrawal ID #{req_id} approved! `${t['amount']}` deducted from <@{uid}>. You can deliver it in-game.")
+    
+    verileri_kaydet()
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -266,6 +320,7 @@ async def deny(ctx, req_id: int):
         await ctx.send("❌ Invalid Request ID!")
         return
     pending_requests.pop(req_id)
+    verileri_kaydet()
     await ctx.send(f"🚫 Request #{req_id} denied.")
 
 @bot.command()
@@ -283,6 +338,7 @@ async def createcoin(ctx, symbol: str, name: str, init_vault: int, init_coin: in
         "total_coin": init_coin,
         "history": [round(init_vault / init_coin, 2)]
     }
+    verileri_kaydet()
     await ctx.send(f"🎉 **New Coin Created:** {name} ({symbol}) - Starting Price: `${current_price(symbol)}`")
 
 @bot.command()
@@ -295,6 +351,7 @@ async def deletecoin(ctx, symbol: str):
         return
         
     del coins[symbol]
+    verileri_kaydet()
     await ctx.send(f"🗑️ **{symbol}** has been completely removed from the market.")
 
 @bot.command()
@@ -309,6 +366,7 @@ async def manipulate(ctx, symbol: str, multiplier: float):
     coins[symbol]["vault_cash"] = int(coins[symbol]["vault_cash"] * multiplier)
     new_price = current_price(symbol)
     coins[symbol]["history"].append(new_price)
+    verileri_kaydet()
     await ctx.send(f"⚡ **Market Manipulation!** {symbol} vault updated. New Price: `${new_price}`")
 
 bot.run(os.getenv("TOKEN"))
