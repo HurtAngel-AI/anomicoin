@@ -271,4 +271,4 @@ async def mudahele(ctx, symbol: str, carpan: float):
     await ctx.send(f"⚡ **Piyasa Müdahalesi!** {symbol} kasası güncellendi. Yeni Fiyat: `${yeni_f}`")
 
 # TOKEN BURAYA YAZILACAK
-bot.run("MTU1NjI4MDI5NDg3OTc5MzIyNA.GGYD6y.oX10g4AYnbtoDNY15UQazmfxky9NWjrqnIbD4E")
+bot.run(os.getenv("TOKEN"))
