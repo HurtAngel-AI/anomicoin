@@ -37,7 +37,6 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")  # Örn: "kullaniciadi/reponame"
 
 def github_veri_cek():
-    # ÇÖKME HATASI BURADA DÜZELTİLDİ: Artık (None, None) dönüyor.
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return None, None
         
@@ -158,6 +157,16 @@ def current_price(symbol):
 async def on_ready():
     print(f'Logged in as {bot.user}!')
 
+# --- BOT SESSİZ KALMASIN DİYE HATA YAKALAYICI ---
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ **Yetki Hatası:** Bu komutu kullanmak için sunucuda **Yönetici (Administrator)** yetkisine sahip olmalısın.")
+    elif isinstance(error, commands.CommandNotFound):
+        pass # Bilinmeyen komutlarda sessiz kalır
+    else:
+        await ctx.send(f"⚠️ **Hata oluştu:** {error}")
+
 # --- PLAYER COMMANDS ---
 
 @bot.command(aliases=['bal'])
@@ -255,7 +264,6 @@ async def buy(ctx, symbol: str, amount: int):
     users[uid]["coins"][symbol] = users[uid]["coins"].get(symbol, 0) + amount
     
     # MATEMATİK YÖNETİCİSİ: ALIŞ ETKİSİ VE RASTGELELİK (HYPE)
-    # Alım yapıldığında havuza giren paraya %0 ile %10 arası ekstra hayali değer eklenir, fiyat rastgele sıçrar.
     hype_multiplier = random.uniform(1.0, 1.10)
     coins[symbol]["vault_cash"] += int(cost * hype_multiplier)
     coins[symbol]["total_coin"] += amount
@@ -281,20 +289,15 @@ async def sell(ctx, symbol: str, amount: int):
     price = current_price(symbol)
     
     # MATEMATİK YÖNETİCİSİ: SATIŞ ETKİSİ VE ASİMETRİK KAYMA (SLIPPAGE)
-    # Kullanıcının sattığı miktar toplam arzın yüzde kaçı?
     supply_ratio = amount / max(coins[symbol]["total_coin"], 1)
-    
-    # Satış ne kadar büyükse, fiyatı o kadar çok ezen bir ceza katsayısı (Slippage)
-    # Örn: Toplam arzın %10'unu satarsa havuzdan %25 daha fazla para silinir, fiyat dibe çakılır.
     penalty = 1.0 + (supply_ratio * 2.5) 
     
-    profit = int(price * amount * 0.95) # %5 standart vergi kesintisi
+    profit = int(price * amount * 0.95) # %5 borsa komisyonu
     
     users[uid]["coins"][symbol] -= amount
     users[uid]["cash"] += profit
     users[uid]["last_sell"] = datetime.datetime.now()
     
-    # Fiyatı Asimetrik Olarak Düşür:
     vault_reduction = int(profit * penalty)
     coins[symbol]["vault_cash"] = max(1000, coins[symbol]["vault_cash"] - vault_reduction)
     coins[symbol]["total_coin"] = max(10, coins[symbol]["total_coin"] - amount)
@@ -313,7 +316,7 @@ async def chart(ctx, symbol: str = "ANC"):
         return
         
     plt.figure(figsize=(8, 4))
-    plt.plot(coins[symbol]["history"][-50:], marker='o', color='gold', linewidth=2) # Son 50 işlemi gösterir
+    plt.plot(coins[symbol]["history"][-50:], marker='o', color='gold', linewidth=2)
     plt.title(f'{coins[symbol]["name"]} ({symbol}) Live Chart')
     plt.xlabel('Recent Transactions')
     plt.ylabel('Price ($)')
@@ -325,7 +328,8 @@ async def chart(ctx, symbol: str = "ANC"):
     
     await ctx.send(file=discord.File(file_name))
 
-# --- ADMIN COMMANDS ---
+# --- ADMIN / MODERATOR COMMANDS ---
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def requests(ctx):
@@ -386,5 +390,33 @@ async def createcoin(ctx, symbol: str, name: str, init_vault: int, init_coin: in
     }
     verileri_kaydet()
     await ctx.send(f"🎉 **New Coin Created:** {name} ({symbol}) - Starting Price: `${current_price(symbol)}`")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def deletecoin(ctx, symbol: str):
+    """Belirtilen coini borsadan tamamen kaldırır."""
+    symbol = symbol.upper()
+    if symbol not in coins:
+        await ctx.send("❌ Coin not found!")
+        return
+        
+    del coins[symbol]
+    verileri_kaydet()
+    await ctx.send(f"🗑️ **{symbol}** has been completely removed from the market.")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def manipulate(ctx, symbol: str, multiplier: float):
+    """Piyasa kasasını çarpanla çarparak fiyatı değiştirir."""
+    symbol = symbol.upper()
+    if symbol not in coins:
+        await ctx.send("❌ Coin not found!")
+        return
+        
+    coins[symbol]["vault_cash"] = int(coins[symbol]["vault_cash"] * multiplier)
+    new_price = current_price(symbol)
+    coins[symbol]["history"].append(new_price)
+    verileri_kaydet()
+    await ctx.send(f"⚡ **Market Manipulation!** {symbol} vault updated. New Price: `${new_price}`")
 
 bot.run(os.getenv("TOKEN"))
