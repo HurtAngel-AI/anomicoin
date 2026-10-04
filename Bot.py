@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 import random
 import datetime
+import time
 import discord
 from discord.ext import commands
 import matplotlib.pyplot as plt
@@ -21,9 +22,28 @@ def run():
     port = int(os.getenv("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
+# --- SELF-PING (KENDİ KENDİNİ UYANIK TUTMA) ---
+def self_ping():
+    """Render'ın uykuya geçmesini engellemek için her 4 dakikada bir kendi sitesine istek atar."""
+    time.sleep(15) # Sunucunun tam başlamasını bekle
+    # Render'daki site URL'ini veya yerel adresi bul
+    url = os.getenv("RENDER_EXTERNAL_URL", "http://127.0.0.1:8080/")
+    while True:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                print("Self-ping başarılı! Bot uyanık tutuluyor.")
+        except Exception as e:
+            print(f"Self-ping hatası (Önemli değil): {e}")
+        time.sleep(240) # 4 dakikada bir tekrar et (Render 15 dk hareketsizlikte uyur)
+
 def keep_alive():
-    t = Thread(target=run)
-    t.start()
+    t_server = Thread(target=run)
+    t_server.start()
+    
+    t_ping = Thread(target=self_ping)
+    t_ping.daemon = True
+    t_ping.start()
 
 keep_alive()
 
@@ -159,7 +179,7 @@ async def on_ready():
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ **Yetki Hatası:** Bu komut için **Yönetici** olmalısın.")
+        await ctx.send("❌ **Yetki Hatası:** Bu komut için **Yönetici** yetkisi gerekiyor.")
     elif isinstance(error, commands.CommandNotFound):
         pass
     else:
