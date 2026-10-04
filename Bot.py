@@ -34,7 +34,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- GITHUB KALICI VERİTABANI SİSTEMİ ---
 DB_FILE = "veritabani.json"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPO")  # Örn: "kullaniciadi/reponame"
+GITHUB_REPO = os.getenv("GITHUB_REPO")
 
 def github_veri_cek():
     if not GITHUB_TOKEN or not GITHUB_REPO:
@@ -46,7 +46,7 @@ def github_veri_cek():
         "Accept": "application/vnd.github.v3+json"
     })
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             res_data = json.loads(response.read().decode())
             file_content = base64.b64decode(res_data["content"]).decode("utf-8")
             return json.loads(file_content), res_data["sha"]
@@ -77,7 +77,7 @@ def github_veri_kaydet(json_string):
     }, method="PUT")
     
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             print("Veriler başarıyla GitHub deposuna yedeklendi!")
     except Exception as e:
         print(f"GitHub'a veri kaydedilirken hata oluştu: {e}")
@@ -120,7 +120,6 @@ def verileri_yukle():
     }
     return default_users, default_coins, {}, 1
 
-# Verileri başlat
 users, coins, pending_requests, request_counter = verileri_yukle()
 
 def verileri_kaydet():
@@ -157,15 +156,14 @@ def current_price(symbol):
 async def on_ready():
     print(f'Logged in as {bot.user}!')
 
-# --- BOT SESSİZ KALMASIN DİYE HATA YAKALAYICI ---
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ **Yetki Hatası:** Bu komutu kullanmak için sunucuda **Yönetici (Administrator)** yetkisine sahip olmalısın.")
+        await ctx.send("❌ **Yetki Hatası:** Bu komut için **Yönetici** olmalısın.")
     elif isinstance(error, commands.CommandNotFound):
-        pass # Bilinmeyen komutlarda sessiz kalır
+        pass
     else:
-        await ctx.send(f"⚠️ **Hata oluştu:** {error}")
+        await ctx.send(f"⚠️ **Hata:** {error}")
 
 # --- PLAYER COMMANDS ---
 
@@ -263,7 +261,6 @@ async def buy(ctx, symbol: str, amount: int):
     users[uid]["cash"] -= cost
     users[uid]["coins"][symbol] = users[uid]["coins"].get(symbol, 0) + amount
     
-    # MATEMATİK YÖNETİCİSİ: ALIŞ ETKİSİ VE RASTGELELİK (HYPE)
     hype_multiplier = random.uniform(1.0, 1.10)
     coins[symbol]["vault_cash"] += int(cost * hype_multiplier)
     coins[symbol]["total_coin"] += amount
@@ -272,7 +269,7 @@ async def buy(ctx, symbol: str, amount: int):
     coins[symbol]["history"].append(new_price)
     
     verileri_kaydet()
-    await ctx.send(f"✅ Bought `{amount}` **{symbol}**! Spent: `${cost}`. New Price: `${new_price}` (Hype Factor applied!)")
+    await ctx.send(f"✅ Bought `{amount}` **{symbol}**! Spent: `${cost}`. New Price: `${new_price}`")
 
 @bot.command()
 async def sell(ctx, symbol: str, amount: int):
@@ -288,11 +285,10 @@ async def sell(ctx, symbol: str, amount: int):
 
     price = current_price(symbol)
     
-    # MATEMATİK YÖNETİCİSİ: SATIŞ ETKİSİ VE ASİMETRİK KAYMA (SLIPPAGE)
     supply_ratio = amount / max(coins[symbol]["total_coin"], 1)
     penalty = 1.0 + (supply_ratio * 2.5) 
     
-    profit = int(price * amount * 0.95) # %5 borsa komisyonu
+    profit = int(price * amount * 0.95)
     
     users[uid]["coins"][symbol] -= amount
     users[uid]["cash"] += profit
@@ -306,7 +302,7 @@ async def sell(ctx, symbol: str, amount: int):
     coins[symbol]["history"].append(new_price)
     
     verileri_kaydet()
-    await ctx.send(f"📉 Sold `{amount}` **{symbol}**. Earned: `${profit}`. ⚠️ Market Impact: {supply_ratio*100:.1f}%\nNew Price: `${new_price}` (Price tanked due to liquidity loss!)")
+    await ctx.send(f"📉 Sold `{amount}` **{symbol}**. Earned: `${profit}`. New Price: `${new_price}`")
 
 @bot.command()
 async def chart(ctx, symbol: str = "ANC"):
@@ -328,7 +324,7 @@ async def chart(ctx, symbol: str = "ANC"):
     
     await ctx.send(file=discord.File(file_name))
 
-# --- ADMIN / MODERATOR COMMANDS ---
+# --- ADMIN COMMANDS ---
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -360,7 +356,7 @@ async def approve(ctx, req_id: int):
         await ctx.send(f"✅ Deposit ID #{req_id} approved! `${t['amount']}` added to <@{uid}>.")
     elif t["type"] == "withdraw":
         users[uid]["cash"] -= t["amount"]
-        await ctx.send(f"✅ Withdrawal ID #{req_id} approved! `${t['amount']}` deducted from <@{uid}>. You can deliver it in-game.")
+        await ctx.send(f"✅ Withdrawal ID #{req_id} approved! `${t['amount']}` deducted from <@{uid}>.")
     
     verileri_kaydet()
 
@@ -394,7 +390,6 @@ async def createcoin(ctx, symbol: str, name: str, init_vault: int, init_coin: in
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def deletecoin(ctx, symbol: str):
-    """Belirtilen coini borsadan tamamen kaldırır."""
     symbol = symbol.upper()
     if symbol not in coins:
         await ctx.send("❌ Coin not found!")
@@ -407,7 +402,6 @@ async def deletecoin(ctx, symbol: str):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def manipulate(ctx, symbol: str, multiplier: float):
-    """Piyasa kasasını çarpanla çarparak fiyatı değiştirir."""
     symbol = symbol.upper()
     if symbol not in coins:
         await ctx.send("❌ Coin not found!")
