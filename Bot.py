@@ -2,6 +2,9 @@ from flask import Flask
 from threading import Thread
 import os
 import json
+import base64
+import urllib.request
+import urllib.error
 
 app = Flask('')
 
@@ -28,31 +31,86 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- KALICI VERİTABANI SİSTEMİ (JSON) ---
+# --- GITHUB KALIICI VERİTABANI SİSTEMİ ---
 DB_FILE = "veritabani.json"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO")  # Örn: "kullaniciadi/reponame"
+
+def github_veri_cek():
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return None
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    })
+    try:
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode())
+            file_content = base64.b64decode(res_data["content"]).decode("utf-8")
+            return json.loads(file_content), res_data["sha"]
+    except Exception as e:
+        print(f"GitHub'dan veri çekilemedi (İlk çalışmada normal olabilir): {e}")
+        return None, None
+
+def github_veri_kaydet(json_string):
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
+    
+    # Mevcut dosyanın SHA değerini almalıyız
+    _, sha = github_veri_cek()
+    
+    encoded_content = base64.b64encode(json_string.encode("utf-8")).decode("utf-8")
+    payload = {
+        "message": "Auto-save database backup [skip ci]",
+        "content": encoded_content
+    }
+    if sha:
+        payload["sha"] = sha
+        
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json"
+    }, method="PUT")
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            print("Veriler başarıyla GitHub deposuna yedeklendi!")
+    except Exception as e:
+        print(f"GitHub'a veri kaydedilirken hata oluştu: {e}")
 
 def verileri_yukle():
-    if os.path.exists(DB_FILE):
+    # Önce GitHub'dan çekmeyi dene
+    gh_data, _ = github_veri_cek()
+    if gh_data:
+        data = gh_data
+    elif os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # JSON anahtarları int (kullanıcı ID'leri) string geleceği için düzeltiyoruz
-                loaded_users = {}
-                for k, v in data.get("users", {}).items():
-                    loaded_users[int(k)] = v
-                    # last_sell tarih alanını datetime objesine çevir
-                    if loaded_users[int(k)].get("last_sell"):
-                        loaded_users[int(k)]["last_sell"] = datetime.datetime.fromisoformat(loaded_users[int(k)]["last_sell"])
-                
-                loaded_requests = {}
-                for k, v in data.get("pending_requests", {}).items():
-                    loaded_requests[int(k)] = v
+        except Exception:
+            data = {}
+    else:
+        data = {}
 
-                return loaded_users, data.get("coins", {}), loaded_requests, data.get("request_counter", 1)
-        except Exception as e:
-            print(f"Veri yüklenirken hata oluştu: {e}")
-    
-    # Varsayılan başlangıç verileri
+    try:
+        loaded_users = {}
+        for k, v in data.get("users", {}).items():
+            loaded_users[int(k)] = v
+            if loaded_users[int(k)].get("last_sell"):
+                loaded_users[int(k)]["last_sell"] = datetime.datetime.fromisoformat(loaded_users[int(k)]["last_sell"])
+        
+        loaded_requests = {}
+        for k, v in data.get("pending_requests", {}).items():
+            loaded_requests[int(k)] = v
+
+        return loaded_users, data.get("coins", {}), loaded_requests, data.get("request_counter", 1)
+    except Exception as e:
+        print(f"Veri işlenirken hata: {e}")
+
     default_users = {}
     default_coins = {
         "ANC": {
@@ -65,7 +123,6 @@ def verileri_yukle():
     return default_users, default_coins, {}, 1
 
 def verileri_kaydet():
-    # datetime objelerini stringe çevirerek JSON'a kaydedilebilir hale getiriyoruz
     users_serializable = {}
     for uid, udata in users.items():
         u_copy = udata.copy()
@@ -79,11 +136,18 @@ def verileri_kaydet():
         "pending_requests": {str(k): v for k, v in pending_requests.items()},
         "request_counter": request_counter
     }
+    
+    json_str = json.dumps(data, ensure_ascii=False, indent=4)
+    
+    # Yerel diske yaz
     try:
         with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            f.write(json_str)
     except Exception as e:
-        print(f"Veri kaydedilirken hata oluştu: {e}")
+        print(f"Yerel kayıt hatası: {e}")
+        
+    # GitHub'a otomatik commit at
+    github_veri_kaydet(json_str)
 
 # Verileri yükle
 users, coins, pending_requests, request_counter = verileri_yukle()
