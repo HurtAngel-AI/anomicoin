@@ -24,9 +24,7 @@ def run():
 
 # --- SELF-PING (KENDİ KENDİNİ UYANIK TUTMA) ---
 def self_ping():
-    """Render'ın uykuya geçmesini engellemek için her 4 dakikada bir kendi sitesine istek atar."""
-    time.sleep(15) # Sunucunun tam başlamasını bekle
-    # Render'daki site URL'ini veya yerel adresi bul
+    time.sleep(15)
     url = os.getenv("RENDER_EXTERNAL_URL", "http://127.0.0.1:8080/")
     while True:
         try:
@@ -34,8 +32,8 @@ def self_ping():
             with urllib.request.urlopen(req, timeout=10) as response:
                 print("Self-ping başarılı! Bot uyanık tutuluyor.")
         except Exception as e:
-            print(f"Self-ping hatası (Önemli değil): {e}")
-        time.sleep(240) # 4 dakikada bir tekrar et (Render 15 dk hareketsizlikte uyur)
+            print(f"Self-ping uyarısı: {e}")
+        time.sleep(240)
 
 def keep_alive():
     t_server = Thread(target=run)
@@ -58,6 +56,7 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 
 def github_veri_cek():
     if not GITHUB_TOKEN or not GITHUB_REPO:
+        print("GITHUB_TOKEN veya GITHUB_REPO bulunamadı!")
         return None, None
         
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DB_FILE}"
@@ -66,7 +65,7 @@ def github_veri_cek():
         "Accept": "application/vnd.github.v3+json"
     })
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=8) as response:
             res_data = json.loads(response.read().decode())
             file_content = base64.b64decode(res_data["content"]).decode("utf-8")
             return json.loads(file_content), res_data["sha"]
@@ -97,37 +96,40 @@ def github_veri_kaydet(json_string):
     }, method="PUT")
     
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=8) as response:
             print("Veriler başarıyla GitHub deposuna yedeklendi!")
     except Exception as e:
         print(f"GitHub'a veri kaydedilirken hata oluştu: {e}")
 
 def verileri_yukle():
+    data = None
+    # Önce GitHub'dan çekmeyi dene
     gh_data, _ = github_veri_cek()
-    data = {}
     if gh_data:
         data = gh_data
+    # Bulunamazsa yerel dosyadan oku
     elif os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
-            data = {}
+            data = None
 
-    try:
-        loaded_users = {}
-        for k, v in data.get("users", {}).items():
-            loaded_users[int(k)] = v
-            if loaded_users[int(k)].get("last_sell"):
-                loaded_users[int(k)]["last_sell"] = datetime.datetime.fromisoformat(loaded_users[int(k)]["last_sell"])
-        
-        loaded_requests = {}
-        for k, v in data.get("pending_requests", {}).items():
-            loaded_requests[int(k)] = v
+    if data:
+        try:
+            loaded_users = {}
+            for k, v in data.get("users", {}).items():
+                loaded_users[int(k)] = v
+                if loaded_users[int(k)].get("last_sell"):
+                    loaded_users[int(k)]["last_sell"] = datetime.datetime.fromisoformat(loaded_users[int(k)]["last_sell"])
+            
+            loaded_requests = {}
+            for k, v in data.get("pending_requests", {}).items():
+                loaded_requests[int(k)] = v
 
-        return loaded_users, data.get("coins", {}), loaded_requests, data.get("request_counter", 1)
-    except Exception as e:
-        print(f"Veri işlenirken hata: {e}")
+            return loaded_users, data.get("coins", {}), loaded_requests, data.get("request_counter", 1)
+        except Exception as e:
+            print(f"Veri işlenirken hata: {e}")
 
     default_users = {}
     default_coins = {
